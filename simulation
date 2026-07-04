@@ -1,0 +1,291 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from datetime import datetime
+
+df = pd.read_csv("/Users/glebfirsakov/gleb/python - vs code projects/untitled folder/s&p data weekly.txt")
+
+df["ref_price"] = (df["Open"] + df["Close"]) / 2
+
+#creating a sample trade request dataset 
+#similating requests by taking random smaples from the data 
+def create_requests(df, num_requests=150):
+    request = []
+    for i in range(num_requests):
+        idx = np.random.randint(0, len(df))  #randomy sleceting a row from the dataframe
+        row = df.iloc[idx]
+
+        ticker = "SPX"
+        date = row["Date"]
+        trade_volume = int(row["Volume"])
+       # trade_volume= np.random.randint(1000, 100000)
+
+        request.append((ticker, date, trade_volume)) #request tuple 
+    
+    return request
+ 
+request = create_requests(df) #creating the request dataset
+
+#maching requests to prices 
+def match_requests_to_prices(request, df):  
+    requests_with_prices = []  
+    
+    for request in request:
+        ticker = request[0]
+        date = request[1]
+        trade_volume = request[2]
+                                                        
+        dat_str = pd.to_datetime(date, format="%d %b %Y") #converting date string to match format in df
+        try: 
+            ref_price = df[df["Date"] == dat_str]["ref_price"].values[0] 
+        except IndexError:
+            closest_idx = (pd.to_datetime(df["Date"]) - pd.to_datetime(date)).abs().idxmin()
+            ref_price = df.iloc[closest_idx]["ref_price"]
+        
+        requests_with_prices.append(([ticker, date, trade_volume], ref_price))
+
+    return requests_with_prices
+ 
+requests_with_prices = match_requests_to_prices(request, df) #matching the requests to prices  
+
+#desining the QuotedTrade class (ticket that holds all info about a price quote you are givign )
+class QuotedTrade:
+    def __init__(self,ticker, trade_volume, ref_price, bid_price, offer_price, date):  #a class to represent a quoted trade
+        self.ticker = ticker
+        self.trade_volume = trade_volume
+        self.ref_price = ref_price
+        self.bid_price = bid_price
+        self.offer_price = offer_price
+        self.date = date
+
+    def __repr__(self):
+       return f"QuotedTrade(ticker={self.ticker}, trade_volume={self.trade_volume}, ref_price={self.ref_price}, bid_price={self.bid_price}, offer_price={self.offer_price}, date={self.date})"
+        
+
+#creating bid-offer spreads for each request and storing them in a list of QuotedTrade objects
+def create_quoted_trades(requests_with_prices): #function that turns your trade requests into price quotes 
+    """Create quoted trades with 2% spread"""
+    quoted_trades = [] #create an empty list to hold the quoted trades
+    
+    for matched in requests_with_prices: #loop through each matched request and price 
+        request_info = matched[0] #matched [0] is the request info (ticker, date, trade_volume)
+        ref_price = matched[1] #matched [1] is the reference price
+        ticker = request_info[0] #these 3 take apart the request info into its components
+        date = request_info[1]
+        trade_volume = request_info[2]
+
+        bid_price = ref_price * 0.98 #forming 2% bid offer and offer price spread
+        offer_price = ref_price * 1.02
+
+        quoted_trade = QuotedTrade(   #created a new quotetrade object with all the information
+            ticker=ticker,
+            trade_volume=trade_volume,
+            ref_price=ref_price,
+            bid_price=bid_price,
+            offer_price=offer_price,
+            date=date
+        )
+        
+        quoted_trades.append(quoted_trade) #adds this quote ticket to the list
+    
+    return quoted_trades  #sends back the complete list of all quote tickers 
+
+quoted_trades = create_quoted_trades(requests_with_prices) #calls the function and stores all the quotes in a variable called quoted_trades
+      
+
+#defining a completed trade class that will hold all the information about a completed trade
+class CompletedTrade:
+    def __init__(self, ticker, trade_volume, trade_price, mm_action, ref_price, bid_price, offer_price, date):
+        self.ticker = ticker
+        self.trade_volume = trade_volume
+        self.trade_price = trade_price
+        self.mm_action = mm_action
+        self.ref_price = ref_price
+        self.bid_price = bid_price
+        self.offer_price = offer_price
+        self.date = date
+
+    def __repr__(self):
+        return f"CompletedTrade(ticker={self.ticker}, trade_volume={self.trade_volume}, trade_price={self.trade_price}, mm_action={self.mm_action}, ref_price={self.ref_price}, bid_price={self.bid_price}, offer_price={self.offer_price}, date={self.date})"
+
+
+#now need to simulate hedge fund responses 
+def simulate_hedge_fund_response(quote): 
+    #can receive 3 types of responceses and we will add weights to each response 
+    responses = ["buy", "sell", "refuse"]
+    weights = [0.45, 0.40, 0.15]  #slight long bias for the mm
+
+    return np.random.choice(responses, p=weights)  #randomly select a response based on the weights
+
+
+#now we can process responses from the hedge fund and complete the trades 
+completed_trades=[]
+
+for quote in quoted_trades:
+    hf_action = simulate_hedge_fund_response(quote) #above simulation based on quotes we provide 
+
+    #processes undergone based on hedge fund buy or sell response 
+    if hf_action == "buy": #therefore we sell to them
+        mm_action = "sell"
+        trade_price = quote.offer_price 
+        completed_trade = CompletedTrade(
+            ticker = quote.ticker,
+            trade_volume = quote.trade_volume,
+            trade_price=trade_price,
+            mm_action=mm_action,
+            ref_price=quote.ref_price,
+            bid_price=quote.bid_price,
+            offer_price=quote.offer_price,
+            date=quote.date )
+        
+        completed_trades.append(completed_trade)
+
+    elif hf_action == "sell": #therefore we buy from them
+        mm_action = "buy"
+        trade_price = quote.bid_price 
+        completed_trade = CompletedTrade(
+            ticker = quote.ticker,
+            trade_volume = quote.trade_volume,
+            trade_price=trade_price,
+            mm_action=mm_action,
+            ref_price=quote.ref_price,
+            bid_price=quote.bid_price,
+            offer_price=quote.offer_price,
+            date=quote.date )
+        
+        completed_trades.append(completed_trade)
+
+#creating summary statistics 
+print(f"\nSummary Trade Statistics") #\n prints a new line , f is used as a format string
+print(f"\nTotal requested quotes: {len(quoted_trades)}")
+print(f"Completed trades: {len(completed_trades)}")
+print(f"Trade completion rate: {len(completed_trades)/len(quoted_trades)*100:.1f}%")
+avg_spread = sum((q.offer_price - q.bid_price) / q.ref_price for q in quoted_trades) / len(quoted_trades)
+print(f"Average spread: {avg_spread*100:.2f}%")
+
+#calculated pnl for all completed trades 
+total_pnl = 0
+for trade in completed_trades:
+    if trade.mm_action == "buy":
+        pnl = trade.trade_volume * (trade.ref_price - trade.trade_price) #profit = volume * (current value - what you paid)
+    else:  #if we sold to the hedge fund
+        pnl = trade.trade_volume * (trade.trade_price - trade.ref_price)
+    total_pnl = total_pnl + pnl
+
+print(f"\nTotal P&L from completed trades: ${total_pnl:,.2f}") # :, adds commas for thousands, .2f shows 2d.p.
+
+#line plot of bid-offer spread over time 
+def plot_quoted_trades(completed_trades):
+    trades_df = pd.DataFrame([{      #creating new dataframe 
+        'date':trade.date,
+        'ref_price':trade.ref_price,
+        'bid_price':trade.bid_price,
+        'offer_price':trade.offer_price,}
+    for trade in completed_trades ])
+
+    trades_df['date'] = pd.to_datetime(trades_df['date']) #aggregating by date order 
+    trades_df = trades_df.sort_values('date')
+
+    fig, ax = plt.subplots(figsize=(15, 6))
+
+    ax.fill_between(trades_df['date'],
+                    trades_df['ref_price'],
+                    trades_df['offer_price'],
+                    alpha = 0.3, color = 'green', label='Offer spread')
+    
+    ax.fill_between(trades_df['date'],
+                    trades_df['bid_price'],
+                    trades_df['ref_price'],
+                    alpha = 0.3, color = 'orange', label='Bid spread')
+
+    ax.plot(trades_df['date'], 
+            trades_df['ref_price'],
+            label='Reference price', 
+            color='black',
+            linewidth=2 )
+
+    ax.plot(trades_df['date'], 
+            trades_df['bid_price'],
+            label='Bid price', 
+            color='red',
+            linewidth=2 )
+    
+    ax.plot(trades_df['date'], 
+            trades_df['offer_price'],
+            label='Offer price', 
+            color='green',
+            linewidth=2 )
+    
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Price')
+    ax.legend(loc = 'upper left')
+    ax.set_title('S&P MM: Bid-Offer Spread')
+
+    plt.xticks(rotation=45, ha='right') #ha='right' ensures it does not overlap with the x-axis
+    plt.tight_layout() #required to show label 
+
+    return trades_df
+
+trades_df = plot_quoted_trades(completed_trades)
+
+#stacked bar chart of total pnl over time seperated by buy/sell side 
+def plot_pnl_stacked_bar(completed_trades):
+    """Create a stacked bar chart of PnL over time, separated by buy/sell side"""
+    
+    # Calculate PnL for each trade and organize by date
+    pnl_data = []
+    for trade in completed_trades:
+        if trade.mm_action == "buy":
+            pnl = trade.trade_volume * (trade.ref_price - trade.trade_price)
+            side = "buy"
+        else:  # mm_action == "sell"
+            pnl = trade.trade_volume * (trade.trade_price - trade.ref_price)
+            side = "sell"
+        
+        pnl_data.append({
+            'date': pd.to_datetime(trade.date),
+            'side': side,
+            'pnl': pnl
+        })
+    
+    # Create DataFrame and aggregate by date and side
+    pnl_df = pd.DataFrame(pnl_data)
+    pnl_by_date_side = pnl_df.groupby(['date', 'side'])['pnl'].sum().unstack(fill_value=0)
+    pnl_by_date_side = pnl_by_date_side.sort_index()
+    
+    # Create stacked bar chart
+    fig, ax = plt.subplots(figsize=(15, 6))
+    
+    pnl_by_date_side.plot(
+        kind='bar',
+        stacked=True,
+        ax=ax,
+        color=['blue', 'orange'],  # Blue for buy, orange for sell
+        width=0.7
+    )
+    
+    ax.set_xlabel('Date')
+    ax.set_ylabel('P&L ($)')
+    ax.set_title('P&L Over Time: Stacked by Buy/Sell Side')
+    ax.legend(['Buy Side P&L', 'Sell Side P&L'], loc='upper left')
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+    
+    # Format y-axis as currency
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+    
+    # Show only every nth date to reduce clutter (adjust the number to show more/fewer dates)
+    n = 5  # Show every 5th date
+    ax.set_xticks(ax.get_xticks()[::n])
+    
+    # Format x-axis labels to show only date without time
+    ax.set_xticklabels([date.strftime('%Y-%m-%d') for date in pnl_by_date_side.index[::n]], rotation=45, ha='right')
+    
+    plt.tight_layout()
+    
+    return pnl_by_date_side
+
+# Generate both charts
+pnl_by_date = plot_pnl_stacked_bar(completed_trades)
+
+# Display both charts at the same time
+plt.show()
